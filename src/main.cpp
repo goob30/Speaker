@@ -1,3 +1,7 @@
+/*
+  TODO: Valid track checking (MP3, WAV, OGG, FLAC),
+  visual effects (flashing period on no track screen)
+*/ 
 #include <Arduino.h>
 #include <Wire.h>
 #include <U8g2lib.h>
@@ -8,6 +12,31 @@ uint8_t ROTARY_A  = 27;
 uint8_t ROTARY_B  = 14;
 uint8_t ROTARY_SW = 12;
 uint8_t MODE_SW   = 16;
+unsigned long lastModePress = 0;
+unsigned long lastRotaryPress = 0;
+const int debounceDelay = 150;
+
+bool lastModeState = HIGH;
+bool lastRotaryState = HIGH;
+
+bool trackListFound = true;
+
+const char* tracks[] = {
+  "Track Alpha",
+  "Track Beta",
+  "Track Gamma",
+  "Track Delta",
+  "Track Echo",
+  "Track Foxtrot",
+  "Track Golf",
+  "Track Hotel",
+  "Track India",
+  "Track Juliet"
+};
+
+const int TRACK_COUNT = sizeof(tracks) / sizeof(tracks[0]);
+
+const int TRACKS_PER_PAGE = 5;
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
 
@@ -52,13 +81,53 @@ void drawPlayerScreen() {
 }
 
 void drawTracksScreen() {
+
   display.setFont(u8g2_font_u8glib_4_tf);
   display.drawStr(0, 10, "Tracks");
 
   display.drawHLine(0, 14, 128);
 
-  display.setFont(u8g2_font_ncenB08_tr);
-  display.drawStr(0, 32, "Track list");
+  display.setFont(u8g2_font_5x7_tr);
+
+  // keep counter within valid range
+  if (counter < 0) counter = 0;
+  if (counter >= TRACK_COUNT) counter = TRACK_COUNT - 1;
+
+  // determine scroll offset so selected track stays visible
+  int scrollOffset = counter - TRACKS_PER_PAGE / 2;
+
+  if (trackListFound) {
+    if (scrollOffset < 0)
+    scrollOffset = 0;
+
+    if (scrollOffset > TRACK_COUNT - TRACKS_PER_PAGE)
+      scrollOffset = TRACK_COUNT - TRACKS_PER_PAGE;
+
+    if (scrollOffset < 0)
+      scrollOffset = 0;
+
+    for (int i = 0; i < TRACKS_PER_PAGE; i++) {
+
+      int trackIndex = scrollOffset + i;
+      if (trackIndex >= TRACK_COUNT)
+        break;
+
+      int y = 24 + (i * 8);
+
+      if (trackIndex == counter) {
+        display.drawBox(0, y - 7, 128, 9);
+        display.setDrawColor(0);
+        display.drawStr(2, y, tracks[trackIndex]);
+        display.setDrawColor(1);
+      } else {
+        display.drawStr(2, y, tracks[trackIndex]);
+      }
+    }
+  } else {
+    display.drawStr(2, 25, "No tracks found.");
+  }
+
+  
 }
 
 void drawSettingsScreen() {
@@ -110,28 +179,26 @@ void handleEncoder() {
 }
 
 void handleButtons() {
-  static bool modeHandled = false;
-  static bool rotaryHandled = false;
-
   bool modeState = digitalRead(MODE_SW);
   bool rotaryState = digitalRead(ROTARY_SW);
 
-  if (modeState == LOW && !modeHandled) {
+  unsigned long now = millis();
+
+  // MODE button (change screen)
+  if (modeState == LOW && lastModeState == HIGH && (now - lastModePress > debounceDelay)) {
     nextScreen();
-    modeHandled = true;
-  }
-  if (modeState == HIGH) {
-    modeHandled = false;
+    lastModePress = now;
   }
 
-  if (rotaryState == LOW && !rotaryHandled) {
+  // ROTARY button (reset counter)
+  if (rotaryState == LOW && lastRotaryState == HIGH && (now - lastRotaryPress > debounceDelay)) {
     counter = 0;
     needsRedraw = true;
-    rotaryHandled = true;
+    lastRotaryPress = now;
   }
-  if (rotaryState == HIGH) {
-    rotaryHandled = false;
-  }
+
+  lastModeState = modeState;
+  lastRotaryState = rotaryState;
 }
 
 void setup() {
