@@ -31,7 +31,7 @@ bool isSongPaused = true;
 int playerScreenScrollX = 0;
 int playerScreenScrollDirection = -1;
 unsigned long lastPlayerScroll = 0;
-const unsigned long PLAYER_SCROLL_INTERVAL = 100; //ms
+const unsigned long PLAYER_SCROLL_INTERVAL = 80; //ms
 const int PLAYER_TEXT_PADDING = 10;
 
 const int MAX_TRACKS = 100;
@@ -123,16 +123,11 @@ void drawClockScreen() {
   display.drawString("Clock", 0, 10);
 
   display.drawFastHLine(0, 24, SCREEN_WIDTH, TFT_WHITE);
-
-  display.setTextFont(2);
-  display.drawString("Count:", 0, 44);
-
-  char buffer[16];
-  snprintf(buffer, sizeof(buffer), "%d", counter);
-  display.drawString(buffer, 60, 44);
-
-  display.setTextFont(1);
-  display.drawString("Press to reset", 0, 72);
+  
+  String time = "12:45";
+  display.setTextFont(7);
+  display.setTextDatum(MC_DATUM);
+  display.drawString(time, SCREEN_WIDTH / 2, 44);
 }
 
 void drawPlayerScreen() {
@@ -218,6 +213,7 @@ void drawTracksScreen() {
       display.drawString(trackName, 2, y);
       display.setTextColor(TFT_WHITE, TFT_BLACK);
     } else {
+      display.fillRect(0, y - 2, SCREEN_WIDTH, 14, TFT_BLACK);
       display.drawString(trackName, 2, y);
     }
   }
