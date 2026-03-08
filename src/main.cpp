@@ -16,6 +16,15 @@ const int I2S_BCLK = 33;
 const int I2S_LRC = 32;
 const int I2S_DOUT = 26;
 
+float audioGain = 0.3;
+const float GAIN_STEP = 0.02;
+
+unsigned long gainDisplayUntil = 0;
+const unsigned long GAIN_DISPLAY_TIME = 1200; // ms
+
+int encoderDelta = 0;
+int encoderDirection = 0;
+
 AudioGeneratorMP3 *mp3 = nullptr;
 AudioFileSourceSD *audioFile = nullptr;
 AudioOutputI2S *audioOut = nullptr;
@@ -25,8 +34,8 @@ const int SCREEN_HEIGHT = 128;
 
 uint8_t SD_CS = 22;
 uint8_t ROTARY_A  = 27;
-uint8_t ROTARY_B  = 35;
-uint8_t ROTARY_SW = 34;
+uint8_t ROTARY_B  = 13;
+uint8_t ROTARY_SW = 14;
 uint8_t MODE_SW   = 16;
 unsigned long lastModePress = 0;
 unsigned long lastRotaryPress = 0;
@@ -248,6 +257,21 @@ void drawPlayerScreen() {
 
   display.drawString(track, xTrack, 44);
   display.drawString(statusText, xStatus, 72);
+  if (millis() < gainDisplayUntil) {
+
+    int percent = (int)(audioGain * 100);
+
+    char gainBuf[16];
+    snprintf(gainBuf, sizeof(gainBuf), "%d%%", percent);
+
+    display.setTextFont(1);
+
+    int w = display.textWidth(gainBuf);
+    int x = (SCREEN_WIDTH - w) / 2;
+
+    display.fillRect(0, 90, SCREEN_WIDTH, 12, TFT_BLACK); // clear area
+    display.drawString(gainBuf, x, 90);
+  }
 }
 
 
@@ -336,15 +360,44 @@ void nextScreen() {
 void handleEncoder() {
   int encoderAState = digitalRead(ROTARY_A);
 
+  encoderDelta = 0;
+  encoderDirection = 0;
+
   if (lastEncoderAState == HIGH && encoderAState == LOW) {
 
-    if (digitalRead(ROTARY_B) != encoderAState)
-      counter++;
-    else
-      counter--;
+    int direction;
 
-    Serial.print("Position: ");
-    Serial.println(counter);
+    if (digitalRead(ROTARY_B) != encoderAState)
+      direction = 1;
+    else
+      direction = -1;
+
+    encoderDelta = direction;
+    encoderDirection = direction;
+
+    // PLAYER SCREEN = adjust gain
+    if (currentScreen == PLAYER) {
+
+      audioGain += direction * GAIN_STEP;
+
+      if (audioGain < 0.0) audioGain = 0.0;
+      if (audioGain > 1.0) audioGain = 1.0;
+
+      audioOut->SetGain(audioGain);
+
+      gainDisplayUntil = millis() + GAIN_DISPLAY_TIME;
+
+      Serial.print("Gain: ");
+      Serial.println(audioGain, 3);
+
+    } else {
+
+      // normal menu scrolling
+      counter += direction;
+
+      Serial.print("Position: ");
+      Serial.println(counter);
+    }
 
     needsRedraw = true;
   }
@@ -441,7 +494,6 @@ void rotaryPressed() {
       Serial.println("PLAYER");
       isSongPaused = !isSongPaused;
       needsRedraw = true;
-      playSelectedTrack();
       break;
 
     case TRACKS:
@@ -450,6 +502,7 @@ void rotaryPressed() {
         selectedTrackIndex = counter;
         currentScreen = PLAYER;
         resetPlayerScroll();
+        playSelectedTrack();
         needsRedraw = true;
         break;
       }
@@ -517,7 +570,7 @@ void setup() {
 
   audioOut = new AudioOutputI2S();
   audioOut->SetPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
-  audioOut->SetGain(0.3);
+  audioOut->SetGain(audioGain);
 }
 
 void loop() {
