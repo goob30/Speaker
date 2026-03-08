@@ -23,12 +23,10 @@ AudioOutputI2S *audioOut = nullptr;
 const int SCREEN_WIDTH = 160;
 const int SCREEN_HEIGHT = 128;
 
-uint8_t SD_CS = 5;
-uint8_t SDA_PIN   = 21;
-uint8_t SCL_PIN   = 22;
+uint8_t SD_CS = 22;
 uint8_t ROTARY_A  = 27;
-uint8_t ROTARY_B  = 14;
-uint8_t ROTARY_SW = 12;
+uint8_t ROTARY_B  = 35;
+uint8_t ROTARY_SW = 34;
 uint8_t MODE_SW   = 16;
 unsigned long lastModePress = 0;
 unsigned long lastRotaryPress = 0;
@@ -519,7 +517,7 @@ void setup() {
 
   audioOut = new AudioOutputI2S();
   audioOut->SetPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
-  audioOut->SetGain(1);
+  audioOut->SetGain(0.3);
 }
 
 void loop() {
