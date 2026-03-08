@@ -129,6 +129,74 @@ int counter = 0;
 int lastEncoderAState = HIGH;
 bool needsRedraw = true;
 
+
+void stopAudio() {
+  if (mp3) {
+    mp3->stop();
+    delete mp3;
+    mp3 = nullptr;
+  }
+
+  if (audioFile) {
+    delete audioFile;
+    audioFile = nullptr;
+  }
+
+  isSongPaused = true;
+}
+
+void playSelectedTrack() {
+  Serial.println("playSelectedTrack called");
+
+  if (!trackListFound || selectedTrackIndex < 0 || selectedTrackIndex >= trackCount) {
+    Serial.println("Invalid track selection");
+    return;
+  }
+
+  stopAudio();
+
+  String path = tracks[selectedTrackIndex];
+  if (!path.startsWith("/")) {
+    path = "/" + path;
+  }
+
+  Serial.print("Playing: ");
+  Serial.println(path);
+
+  audioFile = new AudioFileSourceSD(path.c_str());
+  if (!audioFile || !audioFile->isOpen()) {
+    Serial.println("Failed to open audio file");
+    stopAudio();
+    return;
+  }
+
+  mp3 = new AudioGeneratorMP3();
+
+  bool ok = mp3->begin(audioFile, audioOut);
+  Serial.print("mp3->begin returned: ");
+  Serial.println(ok ? "true" : "false");
+
+  if (ok) {
+    isSongPaused = false;
+  } else {
+    Serial.println("MP3 begin failed");
+    stopAudio();
+  }
+}
+
+void syncAudioToScreen() {
+  if (currentScreen == PLAYER) {
+    if (!mp3 || !mp3->isRunning()) {
+      playSelectedTrack();
+    }
+  } else {
+    if (mp3) {
+      stopAudio();
+      isSongPaused = true;
+    }
+  }
+}
+
 void drawClockScreen() {
   display.setTextFont(2);
   display.drawString("Clock", 0, 10);
@@ -363,14 +431,23 @@ void updatePlayerScroll() {
 
 
 void rotaryPressed() {
+  Serial.print("rotaryPressed currentScreen = ");
+  Serial.println((int)currentScreen);
+
   switch (currentScreen) {
     case CLOCK:
+      Serial.println("CLOCK");
       break;
+
     case PLAYER:
+      Serial.println("PLAYER");
       isSongPaused = !isSongPaused;
       needsRedraw = true;
+      playSelectedTrack();
       break;
+
     case TRACKS:
+      Serial.println("TRACKS");
       if (trackListFound) {
         selectedTrackIndex = counter;
         currentScreen = PLAYER;
@@ -378,9 +455,13 @@ void rotaryPressed() {
         needsRedraw = true;
         break;
       }
+
     case SETTINGS:
+      Serial.println("SETTINGS");
       break;
+
     default:
+      Serial.println("DEFAULT");
       break;
   }
 }
@@ -408,39 +489,7 @@ void handleButtons() {
   lastRotaryState = rotaryState;
 }
 
-void stopAudio() {
-  if (mp3) {
-    mp3->stop();
-    delete mp3;
-    mp3 = nullptr;
-  }
 
-  if (audioFile) {
-    delete audioFile;
-    audioFile = nullptr;
-  }
-}
-
-void playSelectedTrack() {
-  if (!trackListFound || selectedTrackIndex < 0 || selectedTrackIndex >= trackCount) {
-    return;
-  }
-
-  stopAudio();
-
-  String path = tracks[selectedTrackIndex];
-  if (!path.startsWith("/")) {
-    path = "/" + path;
-  }
-
-  Serial.print("Playing: ");
-  Serial.println(path);
-
-  audioFile = new AudioFileSourceSD(path.c_str());
-  mp3 = new AudioGeneratorMP3();
-  mp3->begin(audioFile, audioOut);
-  isSongPaused = false;
-}
 
 void setup() {
   Serial.begin(115200);
@@ -470,7 +519,7 @@ void setup() {
 
   audioOut = new AudioOutputI2S();
   audioOut->SetPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
-  audioOut->SetGain(0.005);
+  audioOut->SetGain(1);
 }
 
 void loop() {
@@ -481,16 +530,19 @@ void loop() {
 
   if (mp3) {
     if (mp3->isRunning()) {
-      if(!mp3->loop()) {
-        mp3 ->stop();
+      bool ok = mp3->loop();
+      if (!ok) {
+        Serial.println("mp3->loop() returned false");
+        mp3->stop();
         stopAudio();
-        isSongPaused = true;
         needsRedraw = true;
       }
+    } else {
+      Serial.println("mp3 exists but is not running");
     }
   }
 
-  if (needsRedraw) {
-    drawCurrentScreen();
+    if (needsRedraw) {
+      drawCurrentScreen();
+    }
   }
-}
