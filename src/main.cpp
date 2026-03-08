@@ -5,9 +5,12 @@
 */ 
 #include <Arduino.h>
 #include <Wire.h>
-#include <U8g2lib.h>
+#include <TFT_eSPI.h>
 #include <SPI.h>
 #include <SD.h>
+
+const int SCREEN_WIDTH = 160;
+const int SCREEN_HEIGHT = 128;
 
 uint8_t SD_CS = 5;
 uint8_t SDA_PIN   = 21;
@@ -39,7 +42,10 @@ int selectedTrackIndex = 0;
 
 const int TRACKS_PER_PAGE = 5;
 
-U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
+const unsigned long PLAYER_SCROLL_PAUSE = 900; //ms
+unsigned long playerScrollPauseUntil = 0;
+
+TFT_eSPI display = TFT_eSPI();
 
 bool isSupportedAudioFile(const String& name) {
   String lower = name;
@@ -47,8 +53,27 @@ bool isSupportedAudioFile(const String& name) {
   return lower.endsWith(".mp3");
 }
 
+String getDisplayTrackName(const String& name) {
+  String displayName = name;
+
+  int slashIndex = displayName.lastIndexOf('/');
+  if (slashIndex >= 0) {
+    displayName = displayName.substring(slashIndex + 1);
+  }
+
+  String lower = displayName;
+  lower.toLowerCase();
+
+  if (lower.endsWith(".mp3")) {
+    displayName = displayName.substring(0, displayName.length() - 4);
+  }
+
+  return displayName;
+}
+
 void loadTracksFromSD() {
   trackCount = 0;
+  trackListFound = false;
 
   File root = SD.open("/");
   if (!root || !root.isDirectory()) {
@@ -71,10 +96,12 @@ void loadTracksFromSD() {
       }
     }
 
+    file.close();
     file = root.openNextFile();
   }
 
   root.close();
+  trackListFound = (trackCount > 0);
 }
 
 enum Screen : uint8_t {
@@ -85,68 +112,76 @@ enum Screen : uint8_t {
 };
 
 Screen currentScreen = CLOCK;
+Screen lastScreen = CLOCK;
 
 int counter = 0;
 int lastEncoderAState = HIGH;
 bool needsRedraw = true;
 
 void drawClockScreen() {
-  display.setFont(u8g2_font_u8glib_4_tf);
-  display.drawStr(0, 10, "Clock");
+  display.setTextFont(2);
+  display.drawString("Clock", 0, 10);
 
-  display.drawHLine(0, 14, 128);
+  display.drawFastHLine(0, 24, SCREEN_WIDTH, TFT_WHITE);
 
-  display.setFont(u8g2_font_ncenB08_tr);
-  display.drawStr(0, 32, "Count:");
+  display.setTextFont(2);
+  display.drawString("Count:", 0, 44);
 
   char buffer[16];
   snprintf(buffer, sizeof(buffer), "%d", counter);
-  display.drawStr(60, 32, buffer);
+  display.drawString(buffer, 60, 44);
 
-  display.setFont(u8g2_font_5x7_tr);
-  display.drawStr(0, 50, "Press to reset");
+  display.setTextFont(1);
+  display.drawString("Press to reset", 0, 72);
 }
 
 void drawPlayerScreen() {
-  display.setFont(u8g2_font_u8glib_4_tf);
-  display.drawStr(0, 10, "Player");
-  display.drawHLine(0, 14, 128);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  display.setTextFont(2);
+
+  display.drawString("Player", 0, 10);
+  display.drawFastHLine(0, 24, SCREEN_WIDTH, TFT_WHITE);
+
+  display.fillRect(0, 40, SCREEN_WIDTH, 50, TFT_BLACK);
 
   if (!trackListFound || selectedTrackIndex < 0 || selectedTrackIndex >= trackCount) {
-    display.setFont(u8g2_font_5x7_tr);
-    display.drawStr(2, 32, "No track selected");
+    display.setTextFont(1);
+    display.drawString("No track selected", 2, 44);
     return;
   }
 
-  display.setFont(u8g2_font_ncenB08_tr);
-
-  const char* track = tracks[selectedTrackIndex].c_str();
-  int trackTextWidth = display.getStrWidth(track);
+  String displayTrack = getDisplayTrackName(tracks[selectedTrackIndex]);
+  const char* track = displayTrack.c_str();
+  int trackTextWidth = display.textWidth(track, 2);
 
   const char* statusText = isSongPaused ? "Paused" : "Playing";
-  int statusTextWidth = display.getStrWidth(statusText);
+  int statusTextWidth = display.textWidth(statusText, 2);
 
-  int screenWidth = 128;
-  int xTrack = (screenWidth - trackTextWidth) / 2;
-  int xStatus = (screenWidth - statusTextWidth) / 2;
+  int xTrack;
+  int xStatus = (SCREEN_WIDTH - statusTextWidth) / 2;
 
-  if (xTrack < 0) {
-    xTrack = 0;
+  if (trackTextWidth <= SCREEN_WIDTH) {
+    xTrack = (SCREEN_WIDTH - trackTextWidth) / 2;
+  } else {
+    xTrack = playerScreenScrollX;
   }
 
-  display.drawStr(xTrack, 32, track);
-  display.drawStr(xStatus, 50, statusText);
+  if (xTrack < SCREEN_WIDTH - trackTextWidth) xTrack = SCREEN_WIDTH - trackTextWidth;
+  if (xStatus < 0) xStatus = 0;
+
+  display.drawString(track, xTrack, 44);
+  display.drawString(statusText, xStatus, 72);
 }
 
 
 void drawTracksScreen() {
-  display.setFont(u8g2_font_u8glib_4_tf);
-  display.drawStr(0, 10, "Tracks");
-  display.drawHLine(0, 14, 128);
-  display.setFont(u8g2_font_5x7_tr);
+  display.setTextFont(2);
+  display.drawString("Tracks", 0, 10);
+  display.drawFastHLine(0, 24, SCREEN_WIDTH, TFT_WHITE);
+  display.setTextFont(1);
 
   if (!trackListFound || trackCount == 0) {
-    display.drawStr(2, 25, "No tracks found.");
+    display.drawString("No tracks found.", 2, 36);
     return;
   }
 
@@ -173,33 +208,37 @@ void drawTracksScreen() {
       break;
     }
 
-    int y = 24 + (i * 8);
-    const char* trackName = tracks[trackIndex].c_str();
+    int y = 36 + (i * 16);
+    String displayTrack = getDisplayTrackName(tracks[trackIndex]);
+    const char* trackName = displayTrack.c_str();
 
     if (trackIndex == counter) {
-      display.drawBox(0, y - 7, 128, 9);
-      display.setDrawColor(0);
-      display.drawStr(2, y, trackName);
-      display.setDrawColor(1);
+      display.fillRect(0, y - 2, SCREEN_WIDTH, 14, TFT_WHITE);
+      display.setTextColor(TFT_BLACK, TFT_WHITE);
+      display.drawString(trackName, 2, y);
+      display.setTextColor(TFT_WHITE, TFT_BLACK);
     } else {
-      display.drawStr(2, y, trackName);
+      display.drawString(trackName, 2, y);
     }
   }
 }
 
 
 void drawSettingsScreen() {
-  display.setFont(u8g2_font_u8glib_4_tf);
-  display.drawStr(0, 10, "Settings");
+  display.setTextFont(2);
+  display.drawString("Settings", 0, 10);
 
-  display.drawHLine(0, 14, 128);
+  display.drawFastHLine(0, 24, SCREEN_WIDTH, TFT_WHITE);
 
-  display.setFont(u8g2_font_ncenB08_tr);
-  display.drawStr(0, 32, "Settings menu");
+  display.setTextFont(2);
+  display.drawString("Settings menu", 0, 44);
 }
 
 void drawCurrentScreen() {
-  display.clearBuffer();
+  if (currentScreen != lastScreen) {
+    display.fillScreen(TFT_BLACK);
+    lastScreen = currentScreen;
+  }
 
   switch (currentScreen) {
     case CLOCK:    drawClockScreen(); break;
@@ -208,7 +247,6 @@ void drawCurrentScreen() {
     case SETTINGS: drawSettingsScreen(); break;
   }
 
-  display.sendBuffer();
   needsRedraw = false;
 }
 
@@ -236,6 +274,82 @@ void handleEncoder() {
   lastEncoderAState = encoderAState;
 }
 
+void resetPlayerScroll() {
+  playerScreenScrollDirection = -1;
+  lastPlayerScroll = millis();
+  playerScrollPauseUntil = 0;
+
+  if (!trackListFound || selectedTrackIndex < 0 || selectedTrackIndex >= trackCount) {
+    playerScreenScrollX = 0;
+    return;
+  }
+
+  display.setTextFont(2);
+
+  String displayTrack = getDisplayTrackName(tracks[selectedTrackIndex]);
+  int trackTextWidth = display.textWidth(displayTrack.c_str(), 2);
+
+  if (trackTextWidth <= SCREEN_WIDTH) {
+    playerScreenScrollX = (SCREEN_WIDTH - trackTextWidth) / 2;
+  } else {
+    playerScreenScrollX = 0;
+  }
+}
+
+void updatePlayerScroll() {
+  if (currentScreen != PLAYER) {
+    return;
+  }
+
+  if (!trackListFound || selectedTrackIndex < 0 || selectedTrackIndex >= trackCount) {
+    return;
+  }
+
+  display.setTextFont(2);
+
+  String displayTrack = getDisplayTrackName(tracks[selectedTrackIndex]);
+  int trackTextWidth = display.textWidth(displayTrack.c_str(), 2);
+
+  if (trackTextWidth <= SCREEN_WIDTH) {
+    int centeredX = (SCREEN_WIDTH - trackTextWidth) / 2;
+    if (playerScreenScrollX != centeredX) {
+      playerScreenScrollX = centeredX;
+      needsRedraw = true;
+    }
+    return;
+  }
+
+  unsigned long now = millis();
+
+  if (playerScrollPauseUntil > now) {
+    return;
+  }
+
+  if (now - lastPlayerScroll < PLAYER_SCROLL_INTERVAL) {
+    return;
+  }
+
+  lastPlayerScroll = now;
+
+  int minX = SCREEN_WIDTH - trackTextWidth;
+  int maxX = 0;
+
+  playerScreenScrollX += playerScreenScrollDirection;
+
+  if (playerScreenScrollX <= minX) {
+    playerScreenScrollX = minX;
+    playerScreenScrollDirection = 1;
+    playerScrollPauseUntil = now + PLAYER_SCROLL_PAUSE;
+  } else if (playerScreenScrollX >= maxX) {
+    playerScreenScrollX = maxX;
+    playerScreenScrollDirection = -1;
+    playerScrollPauseUntil = now + PLAYER_SCROLL_PAUSE;
+  }
+
+  needsRedraw = true;
+}
+
+
 void rotaryPressed() {
   switch (currentScreen) {
     case CLOCK:
@@ -248,6 +362,7 @@ void rotaryPressed() {
       if (trackListFound) {
         selectedTrackIndex = counter;
         currentScreen = PLAYER;
+        resetPlayerScroll();
         needsRedraw = true;
         break;
       }
@@ -281,6 +396,7 @@ void handleButtons() {
   lastRotaryState = rotaryState;
 }
 
+
 void setup() {
   Serial.begin(115200);
 
@@ -288,9 +404,11 @@ void setup() {
   pinMode(ROTARY_B, INPUT_PULLUP);
   pinMode(ROTARY_SW, INPUT_PULLUP);
   pinMode(MODE_SW, INPUT_PULLUP);
-
-  Wire.begin(SDA_PIN, SCL_PIN);
-  display.begin();
+  
+  display.init();
+  display.setRotation(1);
+  display.fillScreen(TFT_BLACK);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
 
   lastEncoderAState = digitalRead(ROTARY_A);
   needsRedraw = true;
@@ -310,6 +428,7 @@ void loop() {
 
   handleEncoder();
   handleButtons();
+  updatePlayerScroll();
 
   if (needsRedraw) {
     drawCurrentScreen();
