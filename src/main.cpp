@@ -8,6 +8,17 @@
 #include <TFT_eSPI.h>
 #include <SPI.h>
 #include <SD.h>
+#include <AudioFileSourceSD.h>
+#include <AudioGeneratorMP3.h>
+#include <AudioOutputI2S.h>
+
+const int I2S_BCLK = 33;
+const int I2S_LRC = 32;
+const int I2S_DOUT = 26;
+
+AudioGeneratorMP3 *mp3 = nullptr;
+AudioFileSourceSD *audioFile = nullptr;
+AudioOutputI2S *audioOut = nullptr;
 
 const int SCREEN_WIDTH = 160;
 const int SCREEN_HEIGHT = 128;
@@ -123,11 +134,16 @@ void drawClockScreen() {
   display.drawString("Clock", 0, 10);
 
   display.drawFastHLine(0, 24, SCREEN_WIDTH, TFT_WHITE);
-  
-  String time = "12:45";
-  display.setTextFont(7);
-  display.setTextDatum(MC_DATUM);
-  display.drawString(time, SCREEN_WIDTH / 2, 44);
+
+  display.setTextFont(2);
+  display.drawString("Count:", 0, 44);
+
+  char buffer[16];
+  snprintf(buffer, sizeof(buffer), "%d", counter);
+  display.drawString(buffer, 60, 44);
+
+  display.setTextFont(1);
+  display.drawString("Press to reset", 0, 72);
 }
 
 void drawPlayerScreen() {
@@ -392,6 +408,39 @@ void handleButtons() {
   lastRotaryState = rotaryState;
 }
 
+void stopAudio() {
+  if (mp3) {
+    mp3->stop();
+    delete mp3;
+    mp3 = nullptr;
+  }
+
+  if (audioFile) {
+    delete audioFile;
+    audioFile = nullptr;
+  }
+}
+
+void playSelectedTrack() {
+  if (!trackListFound || selectedTrackIndex < 0 || selectedTrackIndex >= trackCount) {
+    return;
+  }
+
+  stopAudio();
+
+  String path = tracks[selectedTrackIndex];
+  if (!path.startsWith("/")) {
+    path = "/" + path;
+  }
+
+  Serial.print("Playing: ");
+  Serial.println(path);
+
+  audioFile = new AudioFileSourceSD(path.c_str());
+  mp3 = new AudioGeneratorMP3();
+  mp3->begin(audioFile, audioOut);
+  isSongPaused = false;
+}
 
 void setup() {
   Serial.begin(115200);
@@ -418,6 +467,10 @@ void setup() {
     Serial.println("SD OK");
     loadTracksFromSD();
   }
+
+  audioOut = new AudioOutputI2S();
+  audioOut->SetPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
+  audioOut->SetGain(0.005);
 }
 
 void loop() {
@@ -425,6 +478,17 @@ void loop() {
   handleEncoder();
   handleButtons();
   updatePlayerScroll();
+
+  if (mp3) {
+    if (mp3->isRunning()) {
+      if(!mp3->loop()) {
+        mp3 ->stop();
+        stopAudio();
+        isSongPaused = true;
+        needsRedraw = true;
+      }
+    }
+  }
 
   if (needsRedraw) {
     drawCurrentScreen();
