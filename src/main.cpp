@@ -31,27 +31,51 @@ unsigned long lastPlayerScroll = 0;
 const unsigned long PLAYER_SCROLL_INTERVAL = 100; //ms
 const int PLAYER_TEXT_PADDING = 10;
 
+const int MAX_TRACKS = 100;
 bool trackListFound = true;
-
-const char* tracks[] = {
-  "Track Alpha",
-  "Track Beta",
-  "Track Gamma",
-  "Track Delta",
-  "Track Echo",
-  "Track Foxtrot",
-  "Track Golf",
-  "Track Hotel",
-  "Track India",
-  "Track Juliet"
-};
+String tracks[MAX_TRACKS];
+int trackCount = 0;
 int selectedTrackIndex = 0;
-
-const int TRACK_COUNT = sizeof(tracks) / sizeof(tracks[0]);
 
 const int TRACKS_PER_PAGE = 5;
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
+
+bool isSupportedAudioFile(const String& name) {
+  String lower = name;
+  lower.toLowerCase();
+  return lower.endsWith(".mp3");
+}
+
+void loadTracksFromSD() {
+  trackCount = 0;
+
+  File root = SD.open("/");
+  if (!root || !root.isDirectory()) {
+    Serial.println("Failed to open root");
+    trackListFound = false;
+    return;
+  }
+
+  File file = root.openNextFile();
+
+  while (file && trackCount < MAX_TRACKS) {
+    if (!file.isDirectory()) {
+      String name = String(file.name());
+
+      if (isSupportedAudioFile(name)) {
+        tracks[trackCount] = name;
+        Serial.print("Indexed ");
+        Serial.println(tracks[trackCount]);
+        trackCount++;
+      }
+    }
+
+    file = root.openNextFile();
+  }
+
+  root.close();
+}
 
 enum Screen : uint8_t {
   CLOCK,
@@ -86,78 +110,83 @@ void drawClockScreen() {
 void drawPlayerScreen() {
   display.setFont(u8g2_font_u8glib_4_tf);
   display.drawStr(0, 10, "Player");
-
   display.drawHLine(0, 14, 128);
+
+  if (!trackListFound || selectedTrackIndex < 0 || selectedTrackIndex >= trackCount) {
+    display.setFont(u8g2_font_5x7_tr);
+    display.drawStr(2, 32, "No track selected");
+    return;
+  }
 
   display.setFont(u8g2_font_ncenB08_tr);
 
-  const char* track = tracks[selectedTrackIndex];
-
+  const char* track = tracks[selectedTrackIndex].c_str();
   int trackTextWidth = display.getStrWidth(track);
 
   const char* statusText = isSongPaused ? "Paused" : "Playing";
-  int pausedTextWidth = display.getStrWidth(statusText);
+  int statusTextWidth = display.getStrWidth(statusText);
 
   int screenWidth = 128;
-
   int xTrack = (screenWidth - trackTextWidth) / 2;
-  int xStatus = (screenWidth - pausedTextWidth) / 2;
+  int xStatus = (screenWidth - statusTextWidth) / 2;
+
+  if (xTrack < 0) {
+    xTrack = 0;
+  }
 
   display.drawStr(xTrack, 32, track);
   display.drawStr(xStatus, 50, statusText);
 }
 
-void drawTracksScreen() {
 
+void drawTracksScreen() {
   display.setFont(u8g2_font_u8glib_4_tf);
   display.drawStr(0, 10, "Tracks");
-
   display.drawHLine(0, 14, 128);
-
   display.setFont(u8g2_font_5x7_tr);
 
-  // keep counter within valid range
-  if (counter < 0) counter = 0;
-  if (counter >= TRACK_COUNT) counter = TRACK_COUNT - 1;
-
-  // determine scroll offset so selected track stays visible
-  int scrollOffset = counter - TRACKS_PER_PAGE / 2;
-
-  if (trackListFound) {
-    if (scrollOffset < 0)
-    scrollOffset = 0;
-
-    if (scrollOffset > TRACK_COUNT - TRACKS_PER_PAGE)
-      scrollOffset = TRACK_COUNT - TRACKS_PER_PAGE;
-
-    if (scrollOffset < 0)
-      scrollOffset = 0;
-
-    for (int i = 0; i < TRACKS_PER_PAGE; i++) {
-
-      int trackIndex = scrollOffset + i;
-      if (trackIndex >= TRACK_COUNT)
-        break;
-
-      int y = 24 + (i * 8);
-
-      if (trackIndex == counter) {
-        display.drawBox(0, y - 7, 128, 9);
-        display.setDrawColor(0);
-        display.drawStr(2, y, tracks[trackIndex]);
-        display.setDrawColor(1);
-      } else {
-        display.drawStr(2, y, tracks[trackIndex]);
-      }
-    }
-  } else {
+  if (!trackListFound || trackCount == 0) {
     display.drawStr(2, 25, "No tracks found.");
+    return;
   }
 
-  
+  if (counter < 0) counter = 0;
+  if (counter >= trackCount) counter = trackCount - 1;
 
-  
+  int scrollOffset = counter - TRACKS_PER_PAGE / 2;
+
+  if (scrollOffset < 0) {
+    scrollOffset = 0;
+  }
+
+  if (scrollOffset > trackCount - TRACKS_PER_PAGE) {
+    scrollOffset = trackCount - TRACKS_PER_PAGE;
+  }
+
+  if (scrollOffset < 0) {
+    scrollOffset = 0;
+  }
+
+  for (int i = 0; i < TRACKS_PER_PAGE; i++) {
+    int trackIndex = scrollOffset + i;
+    if (trackIndex >= trackCount) {
+      break;
+    }
+
+    int y = 24 + (i * 8);
+    const char* trackName = tracks[trackIndex].c_str();
+
+    if (trackIndex == counter) {
+      display.drawBox(0, y - 7, 128, 9);
+      display.setDrawColor(0);
+      display.drawStr(2, y, trackName);
+      display.setDrawColor(1);
+    } else {
+      display.drawStr(2, y, trackName);
+    }
+  }
 }
+
 
 void drawSettingsScreen() {
   display.setFont(u8g2_font_u8glib_4_tf);
@@ -273,6 +302,7 @@ void setup() {
     Serial.println("SD failed");
   } else {
     Serial.println("SD OK");
+    loadTracksFromSD();
   }
 }
 
