@@ -1,11 +1,15 @@
 /*
   TODO: Valid track checking (MP3, WAV, OGG, FLAC),
   visual effects (flashing period on no track screen)
+  Add setting to either automatically go to Clock screen after n seconds on player screen or not
 */ 
 #include <Arduino.h>
 #include <Wire.h>
 #include <U8g2lib.h>
+#include <SPI.h>
+#include <SD.h>
 
+uint8_t SD_CS = 5;
 uint8_t SDA_PIN   = 21;
 uint8_t SCL_PIN   = 22;
 uint8_t ROTARY_A  = 27;
@@ -14,10 +18,18 @@ uint8_t ROTARY_SW = 12;
 uint8_t MODE_SW   = 16;
 unsigned long lastModePress = 0;
 unsigned long lastRotaryPress = 0;
-const int debounceDelay = 150;
+const int debounceDelay = 200;
 
 bool lastModeState = HIGH;
 bool lastRotaryState = HIGH;
+
+bool isSongPaused = true;
+
+int playerScreenScrollX = 0;
+int playerScreenScrollDirection = -1;
+unsigned long lastPlayerScroll = 0;
+const unsigned long PLAYER_SCROLL_INTERVAL = 100; //ms
+const int PLAYER_TEXT_PADDING = 10;
 
 bool trackListFound = true;
 
@@ -33,6 +45,7 @@ const char* tracks[] = {
   "Track India",
   "Track Juliet"
 };
+int selectedTrackIndex = 0;
 
 const int TRACK_COUNT = sizeof(tracks) / sizeof(tracks[0]);
 
@@ -77,7 +90,21 @@ void drawPlayerScreen() {
   display.drawHLine(0, 14, 128);
 
   display.setFont(u8g2_font_ncenB08_tr);
-  display.drawStr(0, 32, "Player screen");
+
+  const char* track = tracks[selectedTrackIndex];
+
+  int trackTextWidth = display.getStrWidth(track);
+
+  const char* statusText = isSongPaused ? "Paused" : "Playing";
+  int pausedTextWidth = display.getStrWidth(statusText);
+
+  int screenWidth = 128;
+
+  int xTrack = (screenWidth - trackTextWidth) / 2;
+  int xStatus = (screenWidth - pausedTextWidth) / 2;
+
+  display.drawStr(xTrack, 32, track);
+  display.drawStr(xStatus, 50, statusText);
 }
 
 void drawTracksScreen() {
@@ -126,6 +153,8 @@ void drawTracksScreen() {
   } else {
     display.drawStr(2, 25, "No tracks found.");
   }
+
+  
 
   
 }
@@ -178,6 +207,28 @@ void handleEncoder() {
   lastEncoderAState = encoderAState;
 }
 
+void rotaryPressed() {
+  switch (currentScreen) {
+    case CLOCK:
+      break;
+    case PLAYER:
+      isSongPaused = !isSongPaused;
+      needsRedraw = true;
+      break;
+    case TRACKS:
+      if (trackListFound) {
+        selectedTrackIndex = counter;
+        currentScreen = PLAYER;
+        needsRedraw = true;
+        break;
+      }
+    case SETTINGS:
+      break;
+    default:
+      break;
+  }
+}
+
 void handleButtons() {
   bool modeState = digitalRead(MODE_SW);
   bool rotaryState = digitalRead(ROTARY_SW);
@@ -192,9 +243,9 @@ void handleButtons() {
 
   // ROTARY button (reset counter)
   if (rotaryState == LOW && lastRotaryState == HIGH && (now - lastRotaryPress > debounceDelay)) {
-    counter = 0;
     needsRedraw = true;
     lastRotaryPress = now;
+    rotaryPressed();
   }
 
   lastModeState = modeState;
@@ -210,11 +261,19 @@ void setup() {
   pinMode(MODE_SW, INPUT_PULLUP);
 
   Wire.begin(SDA_PIN, SCL_PIN);
-
   display.begin();
 
   lastEncoderAState = digitalRead(ROTARY_A);
   needsRedraw = true;
+
+  SPI.begin(18, 19, 23, SD_CS);
+  SPI.setDataMode(SPI_MODE0);
+
+  if (!SD.begin(SD_CS, SPI, 1000000)) {
+    Serial.println("SD failed");
+  } else {
+    Serial.println("SD OK");
+  }
 }
 
 void loop() {
